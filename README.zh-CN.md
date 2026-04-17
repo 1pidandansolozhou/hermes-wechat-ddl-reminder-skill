@@ -35,6 +35,7 @@
 - 同事件同DDL自动去重
 - 通过 Hermes cron 自动排提醒
 - Apple Reminders 可用时可联动，不可用自动回退 cron
+- 支持“最近DDL”按时间顺序查询
 
 ## 提醒规则（硬约束）
 
@@ -47,6 +48,9 @@
 - 高优先级事项可加：
   - `T-72h`
   - `T-1h`
+- 灵活提醒时间：
+  - 若提醒点落在 `00:00-08:59`，优先前移到前一天 `22:00`
+  - 且不会把提醒时间挪到过去
 
 ## 提醒格式（固定）
 
@@ -135,6 +139,14 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
   --text "4月21日20:00交数据库作业" \
   --deliver origin \
   --force
+```
+
+### E）查询最近 DDL（按时间顺序）
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
+  --list-upcoming \
+  --limit 20
 ```
 
 ## 运行数据

@@ -1,7 +1,7 @@
 ---
 name: memo-reminder
 description: 微信备忘/DDL提醒专用技能。自动提取事件与DDL并按规则创建提醒，优先 Apple Reminders，不可用时回退 Hermes cron。
-version: 1.2.0
+version: 1.3.0
 author: Custom local skill
 platforms: [macos]
 metadata:
@@ -22,6 +22,7 @@ metadata:
 - 用户在微信里转发他人通知，要求记录截止时间
 - 需要按 DDL 的提前节点自动提醒
 - 需要把提醒发回当前聊天会话（微信 origin）
+- 用户问“最近的DDL / 最近截止事项 / 这周有什么DDL”
 
 ## 路由规则
 
@@ -72,6 +73,14 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
   --deliver origin
 ```
 
+查询最近DDL（按时间顺序）：
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
+  --list-upcoming \
+  --limit 20
+```
+
 ### DDL提醒规则（核心）
 
 1. 当 `DDL - 当前时间 > 48小时`：创建两个提醒  
@@ -89,6 +98,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 5. 智能增强（在不违反以上规则前提下）：
 - 高优先级事项可额外增加 `T-72h` 与 `T-1h` 提醒。
 - 自动去重：同事件同DDL默认不重复创建（可 `--force` 覆盖）。
+- 灵活时间窗口：当提醒点落在 `00:00-08:59`，优先前移到前一天 `22:00`（避免清晨打扰），且不会回退到过去时间。
 
 ## 分类规则
 
@@ -127,3 +137,9 @@ xx事件  XX时间
 2. 提醒标题
 3. 提醒触发时间（T-24h / T-6h / 临近）
 4. 对应 ID（cron job_id 或 Reminders 列表定位信息）
+
+查询“最近DDL”时必须回报：
+
+1. 按 DDL 时间升序
+2. 每项包含：事件名 / 时间 / 分类 / 优先级 / 剩余时间
+3. 无未过期事项时明确回复“暂无未过期DDL事项”

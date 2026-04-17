@@ -36,6 +36,7 @@ This skill is designed for real chat behavior:
 - Dedup by `(normalized_title + ddl)` fingerprint
 - Reminder scheduling via Hermes cron
 - Optional Apple Reminders routing when authorized
+- Upcoming DDL query in chronological order
 
 ## Reminder policy
 
@@ -50,6 +51,9 @@ Smart add-ons (without violating mandatory policy):
 - High-priority items may add:
   - `T-72h`
   - `T-1h`
+- Flexible reminder window:
+  - if a reminder point falls in `00:00-08:59`, it is moved to previous day `22:00`
+  - never moves reminders into past time
 
 ## Reminder format
 
@@ -141,6 +145,14 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
   --text "4月21日20:00交数据库作业" \
   --deliver origin \
   --force
+```
+
+### E) List upcoming DDLs (time-ordered)
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
+  --list-upcoming \
+  --limit 20
 ```
 
 ## Runtime data

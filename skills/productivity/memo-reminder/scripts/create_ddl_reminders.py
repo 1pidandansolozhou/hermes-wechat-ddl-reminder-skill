@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -20,6 +21,11 @@ SKILL_HOME = Path(__file__).resolve().parent.parent
 DATA_DIR = SKILL_HOME / "data"
 TASKS_FILE = DATA_DIR / "tracked_tasks.json"
 CRON_JOBS_FILE = Path.home() / ".hermes" / "cron" / "jobs.json"
+CHANNEL_FILE = Path.home() / ".hermes" / "channel_directory.json"
+
+# User active hours for more human-friendly reminders.
+ONLINE_START_HOUR = 9
+EARLY_SHIFT_TO_PREV_DAY_HOUR = 22
 
 
 @dataclass
@@ -205,6 +211,20 @@ def _priority(text: str, ddl: datetime, now: datetime) -> str:
     return "normal"
 
 
+def _optimize_point_time(when: datetime, now: datetime) -> datetime:
+    """Make reminders align with user's active window (09:00-24:00)."""
+    if 0 <= when.hour < ONLINE_START_HOUR:
+        shifted = (when - timedelta(days=1)).replace(
+            hour=EARLY_SHIFT_TO_PREV_DAY_HOUR,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        if shifted > now:
+            return shifted
+    return when
+
+
 def _build_points(ddl: datetime, now: datetime, priority: str) -> list[ReminderPoint]:
     delta = ddl - now
     points: list[ReminderPoint] = []
@@ -232,10 +252,11 @@ def _build_points(ddl: datetime, now: datetime, priority: str) -> list[ReminderP
 
     dedup: dict[tuple[int, int, int, int, int], ReminderPoint] = {}
     for p in points:
-        if p.when <= now:
+        adjusted = ReminderPoint(when=_optimize_point_time(p.when, now), label=p.label)
+        if adjusted.when <= now:
             continue
-        key = (p.when.year, p.when.month, p.when.day, p.when.hour, p.when.minute)
-        dedup[key] = p
+        key = (adjusted.when.year, adjusted.when.month, adjusted.when.day, adjusted.when.hour, adjusted.when.minute)
+        dedup[key] = adjusted
     return sorted(dedup.values(), key=lambda x: x.when)
 
 
@@ -283,21 +304,135 @@ def _save_tasks(data: dict) -> None:
     TASKS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _existing_cron_ids(prefix: str) -> list[str]:
+def _load_jobs() -> list[dict]:
     if not CRON_JOBS_FILE.exists():
         return []
     try:
         obj = json.loads(CRON_JOBS_FILE.read_text(encoding="utf-8"))
     except Exception:
         return []
+    jobs = obj.get("jobs", [])
+    if not isinstance(jobs, list):
+        return []
+    return [j for j in jobs if isinstance(j, dict)]
+
+
+def _existing_cron_ids(prefix: str) -> list[str]:
     ids: list[str] = []
-    for j in obj.get("jobs", []):
+    for j in _load_jobs():
         name = j.get("name", "")
         if isinstance(name, str) and name.startswith(prefix):
             jid = j.get("id")
             if isinstance(jid, str):
                 ids.append(jid)
     return ids
+
+
+def _resolve_deliver(created_job_ids: list[str], fallback: str) -> str:
+    """Resolve concrete deliver target from jobs.json when possible."""
+    by_id = {str(j.get("id", "")): str(j.get("deliver", "")) for j in _load_jobs()}
+    for jid in created_job_ids:
+        deliver = by_id.get(jid, "")
+        if deliver:
+            return deliver
+    return fallback
+
+
+def _default_deliver() -> str:
+    """Best-effort default when called outside a gateway-origin context."""
+    try:
+        data = json.loads(CHANNEL_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return "local"
+    platforms = data.get("platforms") if isinstance(data, dict) else None
+    if isinstance(platforms, dict):
+        weixin = platforms.get("weixin")
+        if isinstance(weixin, list):
+            for item in weixin:
+                if isinstance(item, dict) and item.get("id"):
+                    return f"weixin:{item['id']}"
+    return "local"
+
+
+def _to_dt(raw: str) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TZ)
+    return dt.astimezone(TZ)
+
+
+def _format_remaining(delta: timedelta) -> str:
+    if delta <= timedelta(0):
+        return "已过期"
+    days = delta.days
+    hours = delta.seconds // 3600
+    minutes = (delta.seconds % 3600) // 60
+    if days > 0:
+        return f"剩余{days}天{hours}小时"
+    if hours > 0:
+        return f"剩余{hours}小时{minutes}分钟"
+    return f"剩余{minutes}分钟"
+
+
+def _list_upcoming(tasks: dict, now: datetime, limit: int, include_expired: bool, as_json: bool) -> int:
+    rows: list[dict] = []
+    for t in tasks.get("tasks", []):
+        if not isinstance(t, dict):
+            continue
+        ddl = _to_dt(t.get("ddl"))
+        if ddl is None:
+            continue
+        if not include_expired and ddl <= now:
+            continue
+        rows.append(
+            {
+                "title": str(t.get("title") or "未命名事件"),
+                "ddl": ddl,
+                "category": str(t.get("category") or "其他"),
+                "priority": str(t.get("priority") or "normal"),
+                "detail": str(t.get("detail") or ""),
+                "fingerprint": str(t.get("fingerprint") or ""),
+            }
+        )
+
+    rows.sort(key=lambda x: x["ddl"])
+    rows = rows[: max(1, limit)]
+
+    if as_json:
+        payload = {
+            "now": now.isoformat(),
+            "count": len(rows),
+            "items": [
+                {
+                    "title": r["title"],
+                    "ddl": r["ddl"].isoformat(),
+                    "category": r["category"],
+                    "priority": r["priority"],
+                    "detail": r["detail"],
+                    "fingerprint": r["fingerprint"],
+                    "remaining": _format_remaining(r["ddl"] - now),
+                }
+                for r in rows
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if not rows:
+        print("暂无未过期DDL事项。")
+        return 0
+
+    print("最近DDL（按时间顺序）:")
+    for idx, r in enumerate(rows, start=1):
+        ddl_text = r["ddl"].strftime("%Y-%m-%d %H:%M")
+        remain = _format_remaining(r["ddl"] - now)
+        print(f"{idx}. {ddl_text} | {r['title']} | {r['category']}/{r['priority']} | {remain}")
+        if r["detail"]:
+            print(f"   说明: {r['detail'][:100]}")
+    return 0
 
 
 def _parse_task(args: argparse.Namespace, now: datetime) -> ParsedTask:
@@ -347,9 +482,18 @@ def main() -> int:
     ap.add_argument("--deliver", default="origin", help="投递目标，默认 origin")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不真正创建")
     ap.add_argument("--force", action="store_true", help="忽略重复检测，强制创建")
+    ap.add_argument("--list-upcoming", action="store_true", help="列出最近DDL（按时间顺序）")
+    ap.add_argument("--limit", type=int, default=20, help="--list-upcoming 时最多返回条数")
+    ap.add_argument("--include-expired", action="store_true", help="--list-upcoming 时包含已过期事项")
+    ap.add_argument("--json", action="store_true", help="--list-upcoming 时以 JSON 输出")
     args = ap.parse_args()
 
     now = _now()
+
+    if args.list_upcoming:
+        tasks = _load_tasks()
+        return _list_upcoming(tasks, now, limit=args.limit, include_expired=args.include_expired, as_json=args.json)
+
     try:
         task = _parse_task(args, now)
     except ValueError as exc:
@@ -382,6 +526,11 @@ def main() -> int:
     hermes = _find_hermes()
     created: list[tuple[str, datetime, str]] = []
 
+    deliver_target = args.deliver
+    if deliver_target == "origin" and not os.getenv("HERMES_SESSION_PLATFORM"):
+        # Outside gateway sessions, origin cannot be resolved reliably.
+        deliver_target = _default_deliver()
+
     for p in points:
         expr = _cron_expr(p.when)
         name = f"{name_prefix}{p.label}"
@@ -394,7 +543,7 @@ def main() -> int:
             "--name",
             name,
             "--deliver",
-            args.deliver,
+            deliver_target,
             "--repeat",
             "1",
         ]
@@ -421,6 +570,8 @@ def main() -> int:
         "detail": task.detail,
         "created_at": now.isoformat(),
         "job_ids": [x[2] for x in created],
+        "deliver": _resolve_deliver([x[2] for x in created], deliver_target),
+        "planned_labels": [x[0] for x in created],
         "source_text": task.source_text,
     }
     tasks.setdefault("tasks", [])
@@ -432,6 +583,7 @@ def main() -> int:
     print(f"- DDL: {task.ddl.strftime('%Y-%m-%d %H:%M')}")
     print(f"- 分类/优先级: {task.category}/{task.priority}")
     print(f"- fingerprint: {fp}")
+    print(f"- 投递: {_resolve_deliver([x[2] for x in created], deliver_target)}")
     for label, when, job_id in created:
         print(f"- {label} {when.strftime('%Y-%m-%d %H:%M')} id={job_id}")
     return 0

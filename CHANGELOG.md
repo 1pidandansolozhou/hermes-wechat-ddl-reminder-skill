@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.0
+
+- Added `--list-upcoming` mode to query upcoming DDL items in chronological order
+- Added flexible reminder-time optimization for low-activity hours (00:00-08:59 → previous day 22:00 when feasible)
+- Added deliver-target hardening for `origin` outside gateway sessions (fallback to primary WeChat channel)
+- Expanded bilingual docs for upcoming-DDL query and flexible scheduling behavior
+
 ## v1.2.0
 
 - Added smart natural-language parsing for WeChat forwarded notifications
