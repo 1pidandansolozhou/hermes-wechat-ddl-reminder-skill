@@ -1,2 +1,3 @@
 .DS_Store
 skills/productivity/memo-reminder/data/tracked_tasks.json
+skills/productivity/memo-reminder/scripts/__pycache__/

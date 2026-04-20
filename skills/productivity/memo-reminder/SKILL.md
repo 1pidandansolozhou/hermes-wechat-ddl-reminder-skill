@@ -1,7 +1,7 @@
 ---
 name: memo-reminder
 description: 微信备忘/DDL提醒专用技能。自动提取事件与DDL并按规则创建提醒，优先 Apple Reminders，不可用时回退 Hermes cron。
-version: 1.3.0
+version: 1.4.0
 author: Custom local skill
 platforms: [macos]
 metadata:
@@ -30,6 +30,7 @@ metadata:
 2. 如果 `remindctl status` 不是 `Authorized`，自动回退 Hermes cron。
 3. 没有给出 DDL 时，先追问最少必要信息（日期/时间）。
 4. 没给具体时分时，默认按当天 `20:00` 处理并在确认消息中说明。
+5. DDL 类提醒默认且强制通过微信通道发送，不使用 email 提醒。
 
 ## Apple Reminders 模式（优先）
 
@@ -62,7 +63,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
   --title "xx事件" \
   --ddl "2026-04-20 18:00" \
   --detail "具体内容（可选）" \
-  --deliver origin
+  --deliver weixin
 ```
 
 或直接喂微信原文（推荐）：
@@ -70,7 +71,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 ```bash
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --text "老师通知：4月20日18:00前提交统计学作业pdf和代码，逾期扣分" \
-  --deliver origin
+  --deliver weixin
 ```
 
 查询最近DDL（按时间顺序）：
@@ -79,6 +80,14 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --list-upcoming \
   --limit 20
+```
+
+执行任务体检（tracked tasks / cron 一致性）：
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
+  --health-check \
+  --json
 ```
 
 ### DDL提醒规则（核心）

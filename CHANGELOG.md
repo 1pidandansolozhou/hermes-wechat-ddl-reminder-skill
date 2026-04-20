@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.4.0
+
+- Improved Chinese time parsing for colloquial formats like `明天下午三点半` / `下午3点半`
+- Added `--health-check` mode to inspect tracked-task and cron-job consistency
+- Updated bilingual docs and skill instructions for health-check workflow
+
 ## v1.3.0
 
 - Added `--list-upcoming` mode to query upcoming DDL items in chronological order

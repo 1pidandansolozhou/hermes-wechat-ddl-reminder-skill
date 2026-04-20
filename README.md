@@ -23,6 +23,7 @@ This skill is designed for real chat behavior:
   - `2026-04-20 18:00`
   - `4月20日18:00`
   - `明天14:00`
+  - `明天下午三点半`
   - `今天23:00`
 - Event extraction from raw text / forwarded notices
 - Category classification:
@@ -39,6 +40,8 @@ This skill is designed for real chat behavior:
 - Upcoming DDL query in chronological order
 
 ## Reminder policy
+
+DDL reminders are WeChat-only by default. Email is not used for DDL reminder delivery.
 
 Mandatory reminder rules:
 
@@ -116,7 +119,7 @@ If authorization is not available, the skill still works using Hermes cron fallb
 ```bash
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --text "老师通知：4月20日18:00前提交统计学作业pdf和代码，逾期扣分" \
-  --deliver origin
+  --deliver weixin
 ```
 
 ### B) Structured mode
@@ -126,7 +129,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
   --title "提交统计学作业" \
   --ddl "2026-04-20 18:00" \
   --detail "pdf + code" \
-  --deliver origin
+  --deliver weixin
 ```
 
 ### C) Dry run (no creation)
@@ -143,7 +146,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 ```bash
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --text "4月21日20:00交数据库作业" \
-  --deliver origin \
+  --deliver weixin \
   --force
 ```
 
@@ -153,6 +156,14 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --list-upcoming \
   --limit 20
+```
+
+### F) Run full task health check
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
+  --health-check \
+  --json
 ```
 
 ## Runtime data

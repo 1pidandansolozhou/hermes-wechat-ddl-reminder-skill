@@ -22,6 +22,7 @@
   - `2026-04-20 18:00`
   - `4月20日18:00`
   - `明天14:00`
+  - `明天下午三点半`
   - `今天23:00`
 - 从转发通知中提取 DDL 与事件
 - 自动分类：
@@ -38,6 +39,8 @@
 - 支持“最近DDL”按时间顺序查询
 
 ## 提醒规则（硬约束）
+
+DDL 提醒默认仅通过微信发送，不使用邮件通道。
 
 1. `DDL - 当前时间 > 48小时`：创建 `T-24h` + `T-6h`
 2. `6小时 < DDL - 当前时间 <= 48小时`：创建 `T-6h`
@@ -110,7 +113,7 @@ remindctl authorize
 ```bash
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --text "老师通知：4月20日18:00前提交统计学作业pdf和代码，逾期扣分" \
-  --deliver origin
+  --deliver weixin
 ```
 
 ### B）结构化输入
@@ -120,7 +123,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
   --title "提交统计学作业" \
   --ddl "2026-04-20 18:00" \
   --detail "pdf + 代码" \
-  --deliver origin
+  --deliver weixin
 ```
 
 ### C）演练模式（不创建任务）
@@ -137,7 +140,7 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 ```bash
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --text "4月21日20:00交数据库作业" \
-  --deliver origin \
+  --deliver weixin \
   --force
 ```
 
@@ -147,6 +150,14 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --list-upcoming \
   --limit 20
+```
+
+### F）全量任务体检（推荐定期执行）
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
+  --health-check \
+  --json
 ```
 
 ## 运行数据

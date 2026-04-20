@@ -18,14 +18,31 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Shanghai")
 SKILL_HOME = Path(__file__).resolve().parent.parent
-DATA_DIR = SKILL_HOME / "data"
-TASKS_FILE = DATA_DIR / "tracked_tasks.json"
+DEFAULT_DATA_DIR = SKILL_HOME / "data"
+DEFAULT_TASKS_FILE = DEFAULT_DATA_DIR / "tracked_tasks.json"
+FALLBACK_TASKS_FILE = Path.home() / ".hermes" / "skills" / "productivity" / "memo-reminder" / "data" / "tracked_tasks.json"
 CRON_JOBS_FILE = Path.home() / ".hermes" / "cron" / "jobs.json"
 CHANNEL_FILE = Path.home() / ".hermes" / "channel_directory.json"
 
 # User active hours for more human-friendly reminders.
 ONLINE_START_HOUR = 9
 EARLY_SHIFT_TO_PREV_DAY_HOUR = 22
+CN_NUM = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+CN_TIME_TOKEN = r"(?:\d{1,2}|[零〇一二两三四五六七八九十]{1,3})"
 
 
 @dataclass
@@ -63,6 +80,60 @@ def _fingerprint(title: str, ddl: datetime) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def _cn_to_int(token: str) -> int | None:
+    s = (token or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+
+    if s == "十":
+        return 10
+    if "十" in s:
+        parts = s.split("十")
+        if len(parts) != 2:
+            return None
+        left, right = parts
+        tens = 1 if left == "" else CN_NUM.get(left)
+        if tens is None:
+            return None
+        if right == "":
+            ones = 0
+        else:
+            ones = CN_NUM.get(right)
+            if ones is None:
+                return None
+        return tens * 10 + ones
+
+    if len(s) == 1:
+        return CN_NUM.get(s)
+    return None
+
+
+def _parse_clock(daypart: str, hour_raw: str, minute_raw: str, half_raw: str) -> tuple[int, int] | None:
+    hour = _cn_to_int(hour_raw)
+    if hour is None:
+        return None
+
+    minute: int
+    if half_raw:
+        minute = 30
+    elif minute_raw:
+        m = _cn_to_int(minute_raw)
+        if m is None:
+            return None
+        minute = m
+    else:
+        minute = 0
+
+    if not (0 <= minute <= 59):
+        return None
+    hour = _apply_daypart(daypart or "", hour)
+    if not (0 <= hour <= 23):
+        return None
+    return hour, minute
+
+
 def _apply_daypart(daypart: str, hour: int) -> int:
     if not daypart:
         return hour
@@ -84,14 +155,14 @@ def _extract_ddl_from_text(text: str, now: datetime) -> tuple[datetime | None, t
     # 1) YYYY-MM-DD [time]
     pat_full = re.compile(
         r"(20\d{2})[年/\-](\d{1,2})[月/\-](\d{1,2})[日号]?"
-        r"(?:\s*([上下午晚上傍晚中午凌晨早上]*)\s*(\d{1,2})(?:[:：点时](\d{1,2}))?)?"
+        rf"(?:\s*([上下午晚上傍晚中午凌晨早上]*)\s*({CN_TIME_TOKEN})(?:[:：点时]({CN_TIME_TOKEN})?)?(半)?)?"
     )
     m = pat_full.search(s)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if m.group(5):
-            hh = _apply_daypart(m.group(4) or "", int(m.group(5)))
-            mm = int(m.group(6) or 0)
+        parsed = _parse_clock(m.group(4) or "", m.group(5) or "", m.group(6) or "", m.group(7) or "")
+        if parsed:
+            hh, mm = parsed
         else:
             hh, mm = 20, 0
         return datetime(y, mo, d, hh, mm, tzinfo=TZ), m.span()
@@ -99,14 +170,14 @@ def _extract_ddl_from_text(text: str, now: datetime) -> tuple[datetime | None, t
     # 2) MM-DD [time]
     pat_md = re.compile(
         r"(?<!\d)(\d{1,2})[月/\-](\d{1,2})[日号]?"
-        r"(?:\s*([上下午晚上傍晚中午凌晨早上]*)\s*(\d{1,2})(?:[:：点时](\d{1,2}))?)?"
+        rf"(?:\s*([上下午晚上傍晚中午凌晨早上]*)\s*({CN_TIME_TOKEN})(?:[:：点时]({CN_TIME_TOKEN})?)?(半)?)?"
     )
     m = pat_md.search(s)
     if m:
         mo, d = int(m.group(1)), int(m.group(2))
-        if m.group(4):
-            hh = _apply_daypart(m.group(3) or "", int(m.group(4)))
-            mm = int(m.group(5) or 0)
+        parsed = _parse_clock(m.group(3) or "", m.group(4) or "", m.group(5) or "", m.group(6) or "")
+        if parsed:
+            hh, mm = parsed
         else:
             hh, mm = 20, 0
         year = now.year
@@ -118,20 +189,34 @@ def _extract_ddl_from_text(text: str, now: datetime) -> tuple[datetime | None, t
     # 3) 今天/明天/后天 [time]
     pat_rel = re.compile(
         r"(今天|明天|后天)"
-        r"(?:\s*([上下午晚上傍晚中午凌晨早上]*)\s*(\d{1,2})(?:[:：点时](\d{1,2}))?)?"
+        rf"(?:\s*([上下午晚上傍晚中午凌晨早上]*)\s*({CN_TIME_TOKEN})(?:[:：点时]({CN_TIME_TOKEN})?)?(半)?)?"
     )
     m = pat_rel.search(s)
     if m:
         offset = {"今天": 0, "明天": 1, "后天": 2}[m.group(1)]
         day = now.date() + timedelta(days=offset)
-        if m.group(3):
-            hh = _apply_daypart(m.group(2) or "", int(m.group(3)))
-            mm = int(m.group(4) or 0)
+        parsed = _parse_clock(m.group(2) or "", m.group(3) or "", m.group(4) or "", m.group(5) or "")
+        if parsed:
+            hh, mm = parsed
         else:
             hh, mm = 20, 0
         return datetime(day.year, day.month, day.day, hh, mm, tzinfo=TZ), m.span()
 
-    # 4) fallback explicit formats
+    # 4) 单独时间（如：下午三点半 / 3点半）默认指向最近未来时间
+    pat_time_only = re.compile(
+        rf"([上下午晚上傍晚中午凌晨早上]*)\s*({CN_TIME_TOKEN})点(?:({CN_TIME_TOKEN})?分?)?(半)?"
+    )
+    m = pat_time_only.search(s)
+    if m:
+        parsed = _parse_clock(m.group(1) or "", m.group(2) or "", m.group(3) or "", m.group(4) or "")
+        if parsed:
+            hh, mm = parsed
+            dt = datetime(now.year, now.month, now.day, hh, mm, tzinfo=TZ)
+            if dt <= now:
+                dt += timedelta(days=1)
+            return dt, m.span()
+
+    # 5) fallback explicit formats
     raw = _normalize_text(s).replace("年", "-").replace("月", "-").replace("日", "")
     raw = raw.replace("/", "-")
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%H:%M"):
@@ -290,18 +375,29 @@ def _run(cmd: Iterable[str]) -> str:
     return res.stdout.strip()
 
 
+def _tasks_file() -> Path:
+    if DEFAULT_TASKS_FILE.exists():
+        return DEFAULT_TASKS_FILE
+    # Running from a dev repo without runtime data: transparently inspect live Hermes data.
+    if FALLBACK_TASKS_FILE.exists():
+        return FALLBACK_TASKS_FILE
+    return DEFAULT_TASKS_FILE
+
+
 def _load_tasks() -> dict:
-    if TASKS_FILE.exists():
+    path = _tasks_file()
+    if path.exists():
         try:
-            return json.loads(TASKS_FILE.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {"tasks": []}
 
 
 def _save_tasks(data: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    TASKS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path = _tasks_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _load_jobs() -> list[dict]:
@@ -339,11 +435,11 @@ def _resolve_deliver(created_job_ids: list[str], fallback: str) -> str:
 
 
 def _default_deliver() -> str:
-    """Best-effort default when called outside a gateway-origin context."""
+    """Resolve the primary WeChat target for DDL reminders."""
     try:
         data = json.loads(CHANNEL_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return "local"
+        raise RuntimeError("未找到可用的微信通道，请先完成 Hermes 微信连接。")
     platforms = data.get("platforms") if isinstance(data, dict) else None
     if isinstance(platforms, dict):
         weixin = platforms.get("weixin")
@@ -351,7 +447,28 @@ def _default_deliver() -> str:
             for item in weixin:
                 if isinstance(item, dict) and item.get("id"):
                     return f"weixin:{item['id']}"
-    return "local"
+    raise RuntimeError("未找到可用的微信通道，请先完成 Hermes 微信连接。")
+
+
+def _normalize_deliver_target(requested: str) -> str:
+    """Enforce WeChat-only delivery for DDL reminders."""
+    raw = (requested or "").strip() or "weixin"
+    lowered = raw.lower()
+    session_platform = (os.getenv("HERMES_SESSION_PLATFORM") or "").strip().lower()
+
+    if lowered.startswith("weixin:"):
+        return raw
+    if lowered == "weixin":
+        return _default_deliver()
+    if lowered == "origin" and session_platform == "weixin":
+        return "origin"
+
+    fallback = _default_deliver()
+    if lowered == "origin":
+        print(f"[memo-reminder] 当前不在微信会话，已将 deliver=origin 改为 {fallback}", file=sys.stderr)
+    else:
+        print(f"[memo-reminder] DDL 提醒仅支持微信，已将 deliver={raw} 改为 {fallback}", file=sys.stderr)
+    return fallback
 
 
 def _to_dt(raw: str) -> datetime | None:
@@ -435,6 +552,120 @@ def _list_upcoming(tasks: dict, now: datetime, limit: int, include_expired: bool
     return 0
 
 
+def _parse_fixed_schedule(expr: str, now: datetime) -> datetime | None:
+    parts = (expr or "").strip().split()
+    if len(parts) != 5:
+        return None
+    minute, hour, day, month, _weekday = parts
+    for p in (minute, hour, day, month):
+        if not p.isdigit():
+            return None
+    try:
+        return datetime(now.year, int(month), int(day), int(hour), int(minute), tzinfo=TZ)
+    except ValueError:
+        return None
+
+
+def _health_check(tasks: dict, jobs: list[dict], now: datetime) -> dict:
+    rows = [t for t in tasks.get("tasks", []) if isinstance(t, dict)]
+    job_by_id = {str(j.get("id") or ""): j for j in jobs if isinstance(j, dict)}
+    tracked_fp = {str(t.get("fingerprint") or "") for t in rows}
+
+    expired_tasks: list[dict] = []
+    orphan_task_job_refs: list[dict] = []
+    for t in rows:
+        ddl = _to_dt(t.get("ddl"))
+        if ddl and ddl <= now:
+            expired_tasks.append(
+                {
+                    "fingerprint": str(t.get("fingerprint") or ""),
+                    "title": str(t.get("title") or "未命名事件"),
+                    "ddl": ddl.isoformat(),
+                }
+            )
+
+        for jid in t.get("job_ids", []) or []:
+            jid_s = str(jid)
+            if jid_s not in job_by_id:
+                orphan_task_job_refs.append(
+                    {
+                        "fingerprint": str(t.get("fingerprint") or ""),
+                        "title": str(t.get("title") or "未命名事件"),
+                        "missing_job_id": jid_s,
+                    }
+                )
+
+    orphan_ddl_jobs: list[dict] = []
+    stale_one_shot_jobs: list[dict] = []
+    ddl_non_weixin_jobs: list[dict] = []
+    for j in jobs:
+        name = str(j.get("name") or "")
+        jid = str(j.get("id") or "")
+        deliver = str(j.get("deliver") or "")
+        repeat = j.get("repeat") if isinstance(j.get("repeat"), dict) else {}
+        repeat_times = repeat.get("times")
+        repeat_completed = int(repeat.get("completed") or 0)
+        expr = str((j.get("schedule") or {}).get("expr") or "")
+
+        if name.startswith("ddl-"):
+            parts = name.split("-")
+            fp = parts[1] if len(parts) > 1 else ""
+            if fp not in tracked_fp:
+                orphan_ddl_jobs.append({"job_id": jid, "name": name, "deliver": deliver})
+            if not deliver.startswith("weixin:"):
+                ddl_non_weixin_jobs.append({"job_id": jid, "name": name, "deliver": deliver})
+
+        run_at = _parse_fixed_schedule(expr, now)
+        if repeat_times == 1 and repeat_completed == 0 and run_at and run_at < now:
+            stale_one_shot_jobs.append(
+                {
+                    "job_id": jid,
+                    "name": name,
+                    "schedule": expr,
+                    "run_at": run_at.isoformat(),
+                    "deliver": deliver,
+                }
+            )
+
+    return {
+        "now": now.isoformat(),
+        "tracked_task_count": len(rows),
+        "cron_job_count": len(jobs),
+        "expired_tasks": expired_tasks,
+        "orphan_task_job_refs": orphan_task_job_refs,
+        "orphan_ddl_jobs": orphan_ddl_jobs,
+        "stale_one_shot_jobs": stale_one_shot_jobs,
+        "ddl_non_weixin_jobs": ddl_non_weixin_jobs,
+    }
+
+
+def _print_health_report(report: dict, as_json: bool) -> int:
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    print("任务体检结果：")
+    print(f"- 当前时间: {report.get('now')}")
+    print(f"- tracked tasks: {report.get('tracked_task_count')}")
+    print(f"- cron jobs: {report.get('cron_job_count')}")
+
+    checks = [
+        ("过期 tracked tasks", "expired_tasks"),
+        ("task->job 孤儿引用", "orphan_task_job_refs"),
+        ("无归属 DDL cron 任务", "orphan_ddl_jobs"),
+        ("疑似未执行的一次性过期任务", "stale_one_shot_jobs"),
+        ("DDL 非微信投递任务", "ddl_non_weixin_jobs"),
+    ]
+    for label, key in checks:
+        rows = report.get(key, []) or []
+        print(f"- {label}: {len(rows)}")
+        for row in rows[:5]:
+            print(f"  - {json.dumps(row, ensure_ascii=False)}")
+        if len(rows) > 5:
+            print(f"  - ... 共 {len(rows)} 项")
+    return 0
+
+
 def _parse_task(args: argparse.Namespace, now: datetime) -> ParsedTask:
     source_text = _normalize_text(args.text or "")
 
@@ -479,13 +710,14 @@ def main() -> int:
     ap.add_argument("--text", default="", help="微信原始通知文本（推荐）")
     ap.add_argument("--category", default="", help="强制分类")
     ap.add_argument("--priority", default="", choices=["high", "medium", "normal"], help="强制优先级")
-    ap.add_argument("--deliver", default="origin", help="投递目标，默认 origin")
+    ap.add_argument("--deliver", default="weixin", help="投递目标，默认 weixin（DDL提醒仅走微信）")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不真正创建")
     ap.add_argument("--force", action="store_true", help="忽略重复检测，强制创建")
     ap.add_argument("--list-upcoming", action="store_true", help="列出最近DDL（按时间顺序）")
     ap.add_argument("--limit", type=int, default=20, help="--list-upcoming 时最多返回条数")
     ap.add_argument("--include-expired", action="store_true", help="--list-upcoming 时包含已过期事项")
-    ap.add_argument("--json", action="store_true", help="--list-upcoming 时以 JSON 输出")
+    ap.add_argument("--health-check", action="store_true", help="输出 tracked tasks 与 cron jobs 的一致性体检结果")
+    ap.add_argument("--json", action="store_true", help="与 --list-upcoming / --health-check 搭配时以 JSON 输出")
     args = ap.parse_args()
 
     now = _now()
@@ -493,6 +725,11 @@ def main() -> int:
     if args.list_upcoming:
         tasks = _load_tasks()
         return _list_upcoming(tasks, now, limit=args.limit, include_expired=args.include_expired, as_json=args.json)
+    if args.health_check:
+        tasks = _load_tasks()
+        jobs = _load_jobs()
+        report = _health_check(tasks, jobs, now)
+        return _print_health_report(report, as_json=args.json)
 
     try:
         task = _parse_task(args, now)
@@ -526,10 +763,11 @@ def main() -> int:
     hermes = _find_hermes()
     created: list[tuple[str, datetime, str]] = []
 
-    deliver_target = args.deliver
-    if deliver_target == "origin" and not os.getenv("HERMES_SESSION_PLATFORM"):
-        # Outside gateway sessions, origin cannot be resolved reliably.
-        deliver_target = _default_deliver()
+    try:
+        deliver_target = _normalize_deliver_target(args.deliver)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 5
 
     for p in points:
         expr = _cron_expr(p.when)
