@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.0
+
+- Reworked the skill instructions into a strict end-to-end WeChat DDL workflow.
+- Added automatic Mac Reminders sync metadata for newly created or updated events.
+- Added `weekday.py` for deterministic date-to-weekday verification.
+- Documented emoji-separated Mac reminder notes and the no-dynamic-countdown rule.
+
 ## v1.4.0
 
 - Improved Chinese time parsing for colloquial formats like `明天下午三点半` / `下午3点半`

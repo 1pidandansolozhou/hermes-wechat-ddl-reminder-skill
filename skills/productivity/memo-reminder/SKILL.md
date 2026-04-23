@@ -1,154 +1,169 @@
 ---
 name: memo-reminder
-description: 微信备忘/DDL提醒专用技能。自动提取事件与DDL并按规则创建提醒，优先 Apple Reminders，不可用时回退 Hermes cron。
-version: 1.4.0
-author: Custom local skill
+description: >
+  微信备忘/DDL提醒完整工作流。提取事件与DDL，按规则创建微信提醒，同步到 Mac 提醒事项。
+  智能判断提醒节点，规范日期/星期校验，统一格式输出。
+version: 2.0.0
+author: Oceanus
 platforms: [macos]
 metadata:
   hermes:
     tags: [reminder, memo, todo, cron, apple-reminders, wechat, ddl]
 ---
 
-# Memo Reminder
-
-用于“微信备忘提醒 / 通知转发 / DDL管理”的专用技能，支持两种模式：
-
-1. Apple Reminders（同步到 iPhone/iPad）
-2. Hermes cron（Agent 本地提醒，免系统权限）
+# Memo Reminder 完整工作流
 
 ## 触发场景
 
-- 用户说“提醒我”“做个备忘”“记一下这个DDL”
-- 用户在微信里转发他人通知，要求记录截止时间
-- 需要按 DDL 的提前节点自动提醒
-- 需要把提醒发回当前聊天会话（微信 origin）
-- 用户问“最近的DDL / 最近截止事项 / 这周有什么DDL”
+- 用户在微信里发"待办/通知/转发消息"
+- 用户说"提醒我"“做个备忘"“记一下DDL"
+- 用户转发他人通知，要求记录截止时间
+- 用户查询"最近DDL““这周有什么事"
 
-## 路由规则
+## 执行流程（严格按顺序）
 
-1. 如果用户明确要“手机同步提醒”，优先 Apple Reminders。
-2. 如果 `remindctl status` 不是 `Authorized`，自动回退 Hermes cron。
-3. 没有给出 DDL 时，先追问最少必要信息（日期/时间）。
-4. 没给具体时分时，默认按当天 `20:00` 处理并在确认消息中说明。
-5. DDL 类提醒默认且强制通过微信通道发送，不使用 email 提醒。
+### Step 1 — 提取与分类
 
-## Apple Reminders 模式（优先）
+从用户消息中提取：
+- 事件名
+- DDL 日期/时间
+- 地点
+- 关键要求（正装、打印简历、报告等）
 
-检查权限：
+分类：学业、工作、会议/活动、缴费/申请、生活、其他
 
-```bash
-remindctl status
-```
+### Step 2 — 日期与星期校验
 
-创建提醒：
+**原则**：不凭记忆脑补星期，但也不每次都走 shell。
 
-```bash
-remindctl add --title "提醒内容" --list Personal --due "2026-04-18 09:00"
-```
-
-查看提醒：
+**方法**：用项目内 `weekday.py` 脚本或 Python 直接计算：
 
 ```bash
-remindctl today
-remindctl tomorrow
-remindctl all
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/weekday.py YYYY-MM-DD
+# 输出：一/二/三/四/五/六/日
 ```
 
-## Hermes cron 回退模式（推荐默认）
-
-统一使用下面的脚本来计算提醒节点并创建 cron（支持智能解析微信原文）：
-
-```bash
-python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
-  --title "xx事件" \
-  --ddl "2026-04-20 18:00" \
-  --detail "具体内容（可选）" \
-  --deliver weixin
+```python
+from datetime import datetime
+WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"]
+dt = datetime(2026, 4, 25)
+print(WEEKDAYS[dt.weekday()])  # 六
 ```
 
-或直接喂微信原文（推荐）：
+**什么时候走 shell**：
+- 查"今天"几月几号 → `date '+%Y-%m-%d %a'` 走一次
+- 新会话首次涉及日期 → 验证一次，后续直接用 Python
+- 已确认过的日期 → 直接引用，不重复验证
 
-```bash
-python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
-  --text "老师通知：4月20日18:00前提交统计学作业pdf和代码，逾期扣分" \
-  --deliver weixin
-```
+### Step 3 — 智能提醒节点判断
 
-查询最近DDL（按时间顺序）：
+以当前北京时间为基准：
 
-```bash
-python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
-  --list-upcoming \
-  --limit 20
-```
+1. `DDL - 现在 > 48小时`：
+   - T-24h（提前一天）
+   - T-6h（当天提前六小时）
 
-执行任务体检（tracked tasks / cron 一致性）：
+2. `6小时 < DDL - 现在 ≤ 48小时`：
+   - T-6h
 
-```bash
-python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
-  --health-check \
-  --json
-```
+3. `DDL - 现在 ≤ 6小时`：
+   - 临近提醒（约1分钟后）
 
-### DDL提醒规则（核心）
+**智能增强**（高优先级事项，不违反上述规则的前提下）：
+- `T-72h`（高优先级且 DDL > 72h）
+- `T-1h`（高优先级且 DDL > 1h）
 
-1. 当 `DDL - 当前时间 > 48小时`：创建两个提醒  
-- `T-24h`（提前一天）
-- `T-6h`（当天提前六小时）
+**时间窗口优化**：提醒点落在 `00:00-08:59` 时，前移到前一天 `22:00`，避免清晨打扰。不会回退到过去时间。
 
-2. 当 `6小时 < DDL - 当前时间 <= 48小时`：创建一个提醒  
-- `T-6h`
+### Step 4 — 创建微信提醒
 
-3. 当 `DDL - 当前时间 <= 6小时`：创建一个“临近提醒”  
-- 立即（约1分钟后）提醒一次
+使用 Hermes cronjob 工具创建，默认通道为 weixin/origin。
 
-4. 过期 DDL：不创建提醒，提示用户该事项已过期并建议更新时间。
-
-5. 智能增强（在不违反以上规则前提下）：
-- 高优先级事项可额外增加 `T-72h` 与 `T-1h` 提醒。
-- 自动去重：同事件同DDL默认不重复创建（可 `--force` 覆盖）。
-- 灵活时间窗口：当提醒点落在 `00:00-08:59`，优先前移到前一天 `22:00`（避免清晨打扰），且不会回退到过去时间。
-
-## 分类规则
-
-收到新事项时先分类（用于组织和摘要，不影响格式）：
-
-- 学业 / 课程 / 作业 / 考试
-- 工作 / 实习 / 项目 / 面试
-- 会议 / 活动 / 报名
-- 缴费 / 证件 / 申请
-- 生活 / 其他
-
-## 提醒消息格式（强制）
-
-提醒正文必须遵循：
+**微信提醒消息格式**：
 
 ```text
 【事件提醒】
-xx事件  XX时间
-具体内容
+xx事件  YYYY-MM-DD HH:mm
+具体内容（可省略）
 ```
 
-- 第三行“具体内容”可按情况省略。
-- 时间统一使用北京时间（Asia/Shanghai）。
+用户偏好的简洁版：
+```text
+🔔 事件名
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 时间
+📍 地点
+📝 关键要求
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ 提醒节点
+```
 
-## 执行检查清单
+### Step 5 — 同步 Mac 提醒事项
 
-创建前：
+**触发条件**：仅在**创建新事件**或**更新已有事件**时同步。**查询时不操作 Mac**。
 
-1. 提取 `事件名 / DDL / 关键信息`。
-2. 判断是否已有同事件同DDL提醒，避免重复创建。
-3. 按规则生成提醒节点。
+**格式规范**：
+- 标题：`🔔 事件名`
+- 备注用 emoji 分割：
+  - `📅 YYYY-MM-DD(星期X) HH:mm`
+  - `📍 地点`
+  - `📝 关键要求/注意事项`
+- **禁止**在备注中写动态倒计时（如"距DDL还有X小时"），因为 Mac 提醒是静态的，倒计时会随时间变得不准。
 
-创建后必须回报：
+**去重复逻辑**：
+- 查询 Mac 提醒事项是否已有同名/同事件
+- 已有 → 删除旧的，重新创建（复写优化）
+- 没有 → 直接新建
 
-1. 使用了哪种模式（Apple Reminders / Hermes cron）
-2. 提醒标题
-3. 提醒触发时间（T-24h / T-6h / 临近）
-4. 对应 ID（cron job_id 或 Reminders 列表定位信息）
+**命令示例**：
 
-查询“最近DDL”时必须回报：
+```bash
+# 检查是否已有
+remindctl all --json
 
-1. 按 DDL 时间升序
-2. 每项包含：事件名 / 时间 / 分类 / 优先级 / 剩余时间
-3. 无未过期事项时明确回复“暂无未过期DDL事项”
+# 删除旧的
+remindctl delete <ID> --force
+
+# 创建新的
+remindctl add --title "🔔 事件名" \
+  --due "YYYY-MM-DD HH:mm" \
+  --notes "📅 日期
+📍 地点
+📝 要求"
+```
+
+### Step 6 — 回报
+
+**必须包含**：
+1. 事件名、DDL时间（含正确星期）、分类、优先级
+2. 微信提醒节点（T-24h / T-6h / 临近）及 cron job_id
+3. Mac 提醒事项同步状态（已同步 / 未同步）
+
+**用户偏好**：
+- 反馈极度简洁，不展示中间分析过程
+- 使用 emoji 和单行分隔线 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+- 不追加礼貌语
+
+## 查询最近DDL
+
+**触发条件**：用户问"最近DDL““这周有什么事"“还有什么没完成"。
+
+**执行**：
+1. 读取 Hermes cron job 列表
+2. 按 DDL 时间升序排列
+3. 展示事件名 + 日期（含星期）+ 剩余时间
+
+**禁止**：查询时操作 Mac 提醒事项。
+
+## 已知陷阱
+
+- 4月25日 = 周六，4月26日 = 周日
+- macOS 不支持 `date -d`，必须用 `date -j -f` 或 Python
+- 提醒点在清晨时自动前移到前一天22:00
+- Mac 备注不写动态倒计时
+- 查询不同步 Mac
+
+## 关键文件
+
+- `scripts/create_ddl_reminders.py` — DDL 解析与 cron 创建
+- `scripts/weekday.py` — 日期转星期（省 token）

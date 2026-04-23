@@ -375,6 +375,32 @@ def _run(cmd: Iterable[str]) -> str:
     return res.stdout.strip()
 
 
+def _try_sync_apple_reminder(title: str, ddl: datetime, detail: str) -> str | None:
+    """Sync DDL to Apple Reminders; return reminder ID or None on failure."""
+    if shutil.which("remindctl") is None:
+        return None
+    due_str = ddl.strftime("%Y-%m-%d %H:%M")
+    cmd = [
+        "remindctl",
+        "add",
+        "--title",
+        title,
+        "--due",
+        due_str,
+        "--list",
+        "Personal",
+    ]
+    if detail.strip():
+        cmd.extend(["--notes", detail[:200]])
+    try:
+        out = _run(cmd)
+        # remindctl may print the new reminder ID or a success line
+        m = re.search(r"([A-F0-9]{4,})", out)
+        return m.group(1) if m else out.strip()[:20] or "ok"
+    except Exception:
+        return None
+
+
 def _tasks_file() -> Path:
     if DEFAULT_TASKS_FILE.exists():
         return DEFAULT_TASKS_FILE
@@ -799,6 +825,8 @@ def main() -> int:
     if args.dry_run:
         return 0
 
+    apple_id = _try_sync_apple_reminder(task.title, task.ddl, task.detail)
+
     row = {
         "fingerprint": fp,
         "title": task.title,
@@ -811,6 +839,8 @@ def main() -> int:
         "deliver": _resolve_deliver([x[2] for x in created], deliver_target),
         "planned_labels": [x[0] for x in created],
         "source_text": task.source_text,
+        "apple_reminder_sync": bool(apple_id),
+        "apple_reminder_id": apple_id,
     }
     tasks.setdefault("tasks", [])
     tasks["tasks"] = [t for t in tasks["tasks"] if t.get("fingerprint") != fp] + [row]
@@ -822,6 +852,10 @@ def main() -> int:
     print(f"- 分类/优先级: {task.category}/{task.priority}")
     print(f"- fingerprint: {fp}")
     print(f"- 投递: {_resolve_deliver([x[2] for x in created], deliver_target)}")
+    if apple_id:
+        print(f"- Mac提醒事项: 已同步 (id={apple_id})")
+    else:
+        print("- Mac提醒事项: 未同步（remindctl 不可用）")
     for label, when, job_id in created:
         print(f"- {label} {when.strftime('%Y-%m-%d %H:%M')} id={job_id}")
     return 0

@@ -35,8 +35,9 @@
 - 自动优先级（`high` / `medium` / `normal`）
 - 同事件同DDL自动去重
 - 通过 Hermes cron 自动排提醒
-- Apple Reminders 可用时可联动，不可用自动回退 cron
+- 新建或更新事件时自动同步到 Mac 提醒事项
 - 支持“最近DDL”按时间顺序查询
+- 通过内置 `weekday.py` 稳定校验日期对应星期
 
 ## 提醒规则（硬约束）
 
@@ -55,7 +56,7 @@ DDL 提醒默认仅通过微信发送，不使用邮件通道。
   - 若提醒点落在 `00:00-08:59`，优先前移到前一天 `22:00`
   - 且不会把提醒时间挪到过去
 
-## 提醒格式（固定）
+## 提醒与 Mac 同步格式
 
 ```text
 【事件提醒】
@@ -64,6 +65,16 @@ xx事件  XX时间
 ```
 
 第三行可按情况省略。
+
+同步到 Mac 提醒事项时，每个事件保留一个归一事项，备注使用 emoji 分割：
+
+```text
+📅 YYYY-MM-DD(星期X) HH:mm
+📍 地点
+📝 关键要求
+```
+
+不会把“距DDL还有X小时”这类动态倒计时写入 Mac 备注，因为静态备注会随时间变得不准。
 
 ## 目录结构
 
@@ -77,7 +88,8 @@ hermes-wechat-ddl-reminder-skill/
         └── memo-reminder/
             ├── SKILL.md
             ├── scripts/
-            │   └── create_ddl_reminders.py
+            │   ├── create_ddl_reminders.py
+            │   └── weekday.py
             └── data/
                 └── tracked_tasks.example.json
 ```
@@ -95,6 +107,7 @@ cp -R skills/productivity/memo-reminder/* ~/.hermes/skills/productivity/memo-rem
 
 ```bash
 chmod +x ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py
+chmod +x ~/.hermes/skills/productivity/memo-reminder/scripts/weekday.py
 ```
 
 ### 3) （可选）接入 Apple Reminders
@@ -105,6 +118,7 @@ remindctl authorize
 ```
 
 如果系统权限未通过，本技能会自动走 Hermes cron，不影响使用。
+如果 `remindctl` 可用，新建或更新事件也会同步到 Mac 提醒事项。
 
 ## 使用方式
 
@@ -158,6 +172,12 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --health-check \
   --json
+```
+
+### G）稳定校验星期
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/weekday.py 2026-04-25
 ```
 
 ## 运行数据

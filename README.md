@@ -36,8 +36,9 @@ This skill is designed for real chat behavior:
 - Priority scoring (`high` / `medium` / `normal`)
 - Dedup by `(normalized_title + ddl)` fingerprint
 - Reminder scheduling via Hermes cron
-- Optional Apple Reminders routing when authorized
+- Automatic Mac Apple Reminders sync for newly created or updated events
 - Upcoming DDL query in chronological order
+- Deterministic weekday verification via the bundled `weekday.py` helper
 
 ## Reminder policy
 
@@ -58,7 +59,7 @@ Smart add-ons (without violating mandatory policy):
   - if a reminder point falls in `00:00-08:59`, it is moved to previous day `22:00`
   - never moves reminders into past time
 
-## Reminder format
+## Reminder and Mac sync format
 
 All reminders follow:
 
@@ -69,6 +70,18 @@ xx事件  XX时间
 ```
 
 The third line is optional when content is minimal.
+
+When syncing to Mac Reminders, the skill keeps one canonical reminder per event,
+using emoji-separated notes:
+
+```text
+📅 YYYY-MM-DD(weekday) HH:mm
+📍 Location
+📝 Key requirements
+```
+
+Dynamic countdown text is intentionally not written to Mac Reminders because it
+becomes stale over time.
 
 ## Project structure
 
@@ -82,7 +95,8 @@ hermes-wechat-ddl-reminder-skill/
         └── memo-reminder/
             ├── SKILL.md
             ├── scripts/
-            │   └── create_ddl_reminders.py
+            │   ├── create_ddl_reminders.py
+            │   └── weekday.py
             └── data/
                 └── tracked_tasks.example.json
 ```
@@ -100,6 +114,7 @@ cp -R skills/productivity/memo-reminder/* ~/.hermes/skills/productivity/memo-rem
 
 ```bash
 chmod +x ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py
+chmod +x ~/.hermes/skills/productivity/memo-reminder/scripts/weekday.py
 ```
 
 ### 3) (Optional) Install Apple Reminders CLI
@@ -111,6 +126,7 @@ remindctl authorize
 ```
 
 If authorization is not available, the skill still works using Hermes cron fallback.
+When `remindctl` is available, new or updated events are also synced to Mac Reminders.
 
 ## Usage
 
@@ -164,6 +180,12 @@ python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders
 python3 ~/.hermes/skills/productivity/memo-reminder/scripts/create_ddl_reminders.py \
   --health-check \
   --json
+```
+
+### G) Verify weekday deterministically
+
+```bash
+python3 ~/.hermes/skills/productivity/memo-reminder/scripts/weekday.py 2026-04-25
 ```
 
 ## Runtime data
